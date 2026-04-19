@@ -1,23 +1,34 @@
-# Claude Code Updater
+<div align="center">
 
-A cross-platform skill that updates [Claude Code](https://docs.anthropic.com/en/docs/claude-code) to the latest version. Handles network failures, process locks, directory conflicts, and installation corruption automatically.
+# ⬆️ Claude Code Updater
 
-## Features
+**一键更新 Claude Code，跨平台自动处理所有错误**
 
-- Cross-platform: Windows, WSL, Linux, macOS
-- Automatic version detection (GitHub API + npm fallback)
-- Proxy support via standard environment variables
-- Orphan process cleanup before install
-- File locking prevents concurrent updates
-- Retries with cleanup on failure
-- Installation verification
-- Zero AI token consumption for the actual update work
+[![GitHub release](https://img.shields.io/github/v/release/circleone1980/claude-code-updater?include_prereleases&label=版本)](https://github.com/circleone1980/claude-code-updater/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20WSL%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+[![Python 3.6+](https://img.shields.io/badge/python-3.6%2B-blue.svg)]()
 
-## Installation
+[English](README.en.md) · 简体中文
 
-### Option 1: Install as a Claude Code Skill
+</div>
 
-Clone into your skills directory:
+---
+
+## ✨ 特性
+
+- 🌍 **跨平台** — Windows / WSL / Linux / macOS 全覆盖
+- 🔍 **自动版本检测** — GitHub API 优先，npm 回退
+- 🔒 **文件锁** — 防止并发更新冲突
+- 🧹 **智能清理** — 自动清理僵尸进程和损坏目录
+- 🔄 **失败重试** — 网络异常自动重试，带清理机制
+- 🌐 **代理支持** — 通过 `HTTPS_PROXY` 环境变量配置
+- ✅ **安装验证** — 更新后自动校验版本号
+- 🪙 **零 Token 消耗** — 脚本完成所有工作，无需 AI 介入分析
+
+## 📦 安装
+
+### 方式一：作为 Claude Code 技能安装（推荐）
 
 ```bash
 git clone https://github.com/circleone1980/claude-code-updater.git
@@ -25,20 +36,17 @@ cd claude-code-updater
 make install
 ```
 
-Or manually:
+或手动安装：
 
 ```bash
-# Linux/macOS
-cp -r update-claude-code ~/.claude/skills/
-
-# Windows (Git Bash)
+# Git Bash / Linux / macOS
 cp -r update-claude-code ~/.claude/skills/
 
 # Windows CMD
 xcopy /E /I update-claude-code %USERPROFILE%\.claude\skills\update-claude-code
 ```
 
-### Option 2: Run Standalone
+### 方式二：独立运行
 
 ```bash
 git clone https://github.com/circleone1980/claude-code-updater.git
@@ -46,21 +54,17 @@ cd claude-code-updater
 py update-claude-code/scripts/update.py
 ```
 
-## Usage
+## 🚀 使用
 
-### In Claude Code
+### 在 Claude Code 中
 
-Once installed as a skill, simply tell Claude:
+安装为技能后，直接对 Claude 说：
 
-```
-update claude
-check for updates
-upgrade claude code
-```
+> `更新 claude` · `检查更新` · `update claude code`
 
-Claude will invoke the update script automatically.
+Claude 会自动调用更新脚本。
 
-### From Command Line
+### 命令行直接运行
 
 ```bash
 # Git Bash / Linux / macOS
@@ -70,64 +74,74 @@ py ~/.claude/skills/update-claude-code/scripts/update.py
 py %USERPROFILE%\.claude\skills\update-claude-code\scripts\update.py
 ```
 
-### With Proxy
+### 使用代理
 
 ```bash
+# Linux / macOS / Git Bash
 export HTTPS_PROXY=http://127.0.0.1:7890
-py ~/.claude/skills/update-claude-code/scripts/update.py
+
+# Windows PowerShell
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
 ```
 
-## Requirements
+## 🛠️ 工作原理
 
-**Required:**
+```
+ 🔒 获取文件锁 → 🧹 清理僵尸进程 → 🔍 检测当前版本
+      ↓
+ 🌐 获取最新版本（GitHub → npm 回退）
+      ↓
+ ⚖️ 版本比较 → ⏭️ 已是最新？→ ✅ 退出
+      ↓
+ 📦 npm install（带超时和重试）
+      ↓
+ ✅ 验证版本 → 🔓 释放锁
+```
+
+## 🖥️ 平台支持
+
+| 平台 | 状态 | 说明 |
+|:---:|:---:|:---|
+| 🪟 Windows | ✅ | 原生 + Git Bash + PowerShell |
+| 🐧 WSL | ✅ | 完整进程管理 |
+| 🐧 Linux | ✅ | 所有主流发行版 |
+| 🍎 macOS | ✅ | macOS 10.15+ |
+
+## 📋 依赖
+
+**必需：**
 - Python 3.6+
 - npm
-- Claude Code (installed)
+- Claude Code（已安装）
 
-**Optional (improves reliability):**
+**可选（提升可靠性）：**
 ```bash
 pip install psutil requests filelock
 ```
 
-## How It Works
+| 包 | 作用 |
+|:---|:---|
+| `psutil` | 僵尸进程检测与清理 |
+| `requests` | 更健壮的 HTTP 处理 |
+| `filelock` | 跨平台文件锁 |
 
-```
-1. Acquire file lock (prevents concurrent updates)
-2. Kill orphan npm processes (if psutil available)
-3. Detect current Claude Code version
-4. Fetch latest version from GitHub (fallback to npm)
-5. Compare versions → skip if up to date
-6. Install via npm with timeout and retry
-7. Verify installed version matches target
-8. Release lock
-```
+## ⚙️ 配置
 
-## Platform Support
+详见 [configuration.md](update-claude-code/references/configuration.md) — 超时时间、重试次数、平台备注等。
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Windows | Supported | Native + Git Bash + PowerShell |
-| WSL | Supported | Full process management |
-| Linux | Supported | All distributions |
-| macOS | Supported | macOS 10.15+ |
+## 🔧 故障排除
 
-## Configuration
+详见 [troubleshooting.md](update-claude-code/references/troubleshooting.md) — 权限错误、锁文件、网络超时等。
 
-See `update-claude-code/references/configuration.md` for tunable parameters and platform-specific notes.
-
-## Troubleshooting
-
-See `update-claude-code/references/troubleshooting.md` for common issues.
-
-## Development
+## 👨‍💻 开发
 
 ```bash
-make validate   # Validate SKILL.md format
-make test       # Syntax check update.py
-make package    # Create .skill package
-make clean      # Remove build artifacts
+make validate   # 验证 SKILL.md 格式
+make test       # 语法检查 update.py
+make package    # 打包为 .skill
+make clean      # 清理构建产物
 ```
 
-## License
+## 📄 许可证
 
-MIT
+[MIT](LICENSE)
