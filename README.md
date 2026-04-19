@@ -20,7 +20,7 @@ A cross-platform skill that updates [Claude Code](https://docs.anthropic.com/en/
 Clone into your skills directory:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-code-updater.git
+git clone https://github.com/circleone1980/claude-code-updater.git
 cd claude-code-updater
 make install
 ```
@@ -41,7 +41,7 @@ xcopy /E /I update-claude-code %USERPROFILE%\.claude\skills\update-claude-code
 ### Option 2: Run Standalone
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-code-updater.git
+git clone https://github.com/circleone1980/claude-code-updater.git
 cd claude-code-updater
 py update-claude-code/scripts/update.py
 ```
