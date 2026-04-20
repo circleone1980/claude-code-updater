@@ -144,11 +144,13 @@ def compare_versions(v1: str, v2: str) -> str:
 
 def get_version_npm() -> Optional[str]:
     try:
+        use_shell = platform.system() == 'Windows'
         result = subprocess.run(
             ['npm', 'view', '@anthropic-ai/claude-code', 'version'],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            shell=use_shell
         )
         if result.returncode == 0:
             version = result.stdout.strip()
@@ -308,11 +310,13 @@ def cleanup_npm_dirs():
     log_info("Cleaning up npm installation directories...")
 
     try:
+        use_shell = platform.system() == 'Windows'
         result = subprocess.run(
             ['npm', 'root', '-g'],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            shell=use_shell
         )
 
         if result.returncode == 0:
@@ -327,7 +331,8 @@ def cleanup_npm_dirs():
         subprocess.run(
             ['npm', 'cache', 'clean', '--force', '@anthropic-ai/claude-code'],
             capture_output=True,
-            timeout=10
+            timeout=10,
+            shell=use_shell
         )
     except Exception as e:
         log_warn(f"Cleanup warning: {e}")
