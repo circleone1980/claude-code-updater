@@ -1,0 +1,27 @@
+[
+  {
+    "name": "update-available",
+    "prompt": "Update Claude Code to the latest version",
+    "expected_behavior": "Script detects current version, fetches latest, installs update, verifies installation"
+  },
+  {
+    "name": "already-up-to-date",
+    "prompt": "Check if Claude Code needs updating",
+    "expected_behavior": "Script reports current version matches latest, exits with success"
+  },
+  {
+    "name": "network-fallback",
+    "prompt": "My internet is flaky, update Claude Code",
+    "expected_behavior": "Script tries GitHub API, falls back to npm registry on failure"
+  },
+  {
+    "name": "proxy-environment",
+    "prompt": "Update Claude Code (I use a proxy at 127.0.0.1:7890)",
+    "expected_behavior": "Script reads HTTPS_PROXY env var and uses it for all network requests"
+  },
+  {
+    "name": "update-fails-manual-command",
+    "prompt": "Try updating Claude Code even if it might fail",
+    "expected_behavior": "Script retries twice, then prints manual npm install command with correct version"
+  }
+]

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.skill
+.DS_Store
+*.log
+claude-update.lock
