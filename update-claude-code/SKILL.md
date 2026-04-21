@@ -1,6 +1,6 @@
 ---
 name: update-claude-code
-description: Use this skill when the user wants to update, upgrade, or check the version of Claude Code. Handles all errors automatically including network failures, process locks, directory conflicts, and installation corruption. Works on Windows, WSL, Linux, and macOS. Trigger phrases include update claude, upgrade claude code, check for updates, or any mention of Claude Code version concerns.
+description: Use this skill when the user wants to update, upgrade, or check the version of Claude Code. Handles Windows exe file locks by renaming before install. Works while Claude is running on Windows. Trigger phrases include update claude, upgrade claude code, check for updates, or any mention of Claude Code version concerns.
 ---
 
 # Claude Code Updater
@@ -18,19 +18,32 @@ On Windows CMD/PowerShell:
 py %USERPROFILE%\.claude\skills\update-claude-code\scripts\update.py
 ```
 
-The script handles everything: version detection, cleanup, retries, verification.
+The script handles everything: version detection, file lock handling, installation, verification.
+
+## How It Works (Windows)
+
+When Claude is running on Windows, `claude.exe` is locked and npm install fails with EBUSY.
+The script works around this by:
+
+1. Renaming locked `claude.exe` → `claude.exe.old` (Windows allows renaming running exe)
+2. Running `npm install -g --force` (succeeds because original path is now free)
+3. Cleaning up `.old` files after successful install
+
+This allows updating Claude **without closing the current session**.
 
 ## What It Handles Automatically
 
 | Issue | Resolution |
 |-------|------------|
-| GitHub API timeout | Falls back to npm registry |
+| Windows EBUSY file lock | Renames exe files before install |
+| GitHub API timeout/rate limit | Falls back to npm registry |
 | ENOTEMPTY directory conflict | Removes conflicting directories |
 | Zombie npm processes | Kills orphan processes holding files |
 | Installation timeout | Retries with cleanup |
 | Corrupted installation | Full cleanup before reinstall |
 | Concurrent updates | File locking prevents conflicts |
 | Cross-platform paths | Uses OS-appropriate temp directories |
+| Volta npm shim | Works with or without Volta |
 
 ## Exit Codes
 

@@ -1,5 +1,15 @@
 # Troubleshooting
 
+## "EBUSY: resource busy or locked" on Windows
+
+This happens when Claude is running and npm tries to overwrite `claude.exe`.
+The script handles this automatically by renaming locked files before install.
+If it still fails:
+
+1. Close all Claude Code sessions
+2. Run the updater again
+3. Or manually: `npm install -g @anthropic-ai/claude-code@latest`
+
 ## "Permission denied" errors
 
 - **Windows**: Run as Administrator
@@ -24,8 +34,6 @@ If the script reports another update is running but it's not:
    - Linux/macOS: `/tmp/claude-update.lock`
 2. Run the script again
 
-The lock file is located in your system's temporary directory.
-
 ## Network timeout
 
 The script tries GitHub API first, then falls back to npm registry.
@@ -49,6 +57,16 @@ npm install -g @anthropic-ai/claude-code
 Verify with:
 ```bash
 claude --version
+```
+
+## Leftover .old files
+
+After updates on Windows, `claude.exe.old` files may remain if Claude was running.
+The script cleans these on the next update run. To clean manually:
+
+```bash
+# Find and remove .old files
+find "$(npm root -g)/@anthropic-ai" -name "*.old" -delete
 ```
 
 ## ENOTEMPTY or directory conflicts

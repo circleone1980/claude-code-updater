@@ -2,6 +2,9 @@
 """
 Claude Code Updater - Cross-Platform Version
 Supports: Windows, WSL, Linux, macOS
+
+Windows: Renames locked exe files before npm install to avoid EBUSY errors.
+Other platforms: Standard npm install.
 """
 
 import sys
@@ -14,7 +17,7 @@ import json
 import tempfile
 import platform
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 # Try to import optional dependencies
 try:
@@ -40,12 +43,18 @@ except ImportError:
 # CONFIGURATION
 # =============================================================================
 
-INSTALL_TIMEOUT = 90  # seconds
+INSTALL_TIMEOUT = 120  # seconds (increased for large platform packages)
 PROCESS_KILL_WAIT = 3  # seconds
 MAX_RETRIES = 2
 ORPHAN_AGE_THRESHOLD = 30  # seconds
 
 VERSION_PATTERN = re.compile(r'(\d+\.\d+\.\d+)')
+
+# Locked exe paths relative to npm root (Windows only)
+LOCKED_EXE_RELPATHS = [
+    Path('@anthropic-ai') / 'claude-code' / 'bin' / 'claude.exe',
+    Path('@anthropic-ai') / 'claude-code' / 'node_modules' / '@anthropic-ai' / 'claude-code-win32-x64' / 'claude.exe',
+]
 
 
 def extract_version(text: str) -> Optional[str]:
@@ -54,8 +63,8 @@ def extract_version(text: str) -> Optional[str]:
 
 
 def _get_proxies() -> dict:
-    """Get proxy dict from environment variables"""
-    proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+    proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY') or \
+            os.environ.get('https_proxy') or os.environ.get('http_proxy')
     if proxy:
         return {'http': proxy, 'https': proxy}
     return {}
@@ -71,11 +80,11 @@ class Colors:
 
     @classmethod
     def is_color_supported(cls):
-        return (
-            hasattr(sys.stdout, 'isatty') and
-            sys.stdout.isatty() and
-            (platform.system() != 'Windows' or 'WT_SESSION' in os.environ)
-        )
+        if not (hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()):
+            return False
+        if platform.system() == 'Windows':
+            return 'WT_SESSION' in os.environ or 'MSYSTEM' in os.environ
+        return True
 
     @classmethod
     def colorize(cls, color, text):
@@ -85,7 +94,7 @@ class Colors:
 
 
 # =============================================================================
-# UTILITY FUNCTIONS
+# LOGGING
 # =============================================================================
 
 def log_info(message):
@@ -100,6 +109,10 @@ def log_warn(message):
 def log_error(message):
     print(Colors.colorize(Colors.RED, f"[ERROR] {message}"), file=sys.stderr)
 
+
+# =============================================================================
+# VERSION DETECTION
+# =============================================================================
 
 def get_current_version() -> Optional[str]:
     try:
@@ -121,36 +134,26 @@ def get_current_version() -> Optional[str]:
 def compare_versions(v1: str, v2: str) -> str:
     if v1 == v2:
         return 'eq'
-
     parts1 = [int(x) for x in v1.split('.')]
     parts2 = [int(x) for x in v2.split('.')]
-
     max_len = max(len(parts1), len(parts2))
     parts1.extend([0] * (max_len - len(parts1)))
     parts2.extend([0] * (max_len - len(parts2)))
-
     for p1, p2 in zip(parts1, parts2):
         if p1 < p2:
             return 'lt'
         elif p1 > p2:
             return 'gt'
-
     return 'eq'
 
 
-# =============================================================================
-# VERSION DETECTION
-# =============================================================================
-
 def get_version_npm() -> Optional[str]:
     try:
-        use_shell = platform.system() == 'Windows'
         result = subprocess.run(
             ['npm', 'view', '@anthropic-ai/claude-code', 'version'],
             capture_output=True,
             text=True,
-            timeout=10,
-            shell=use_shell
+            timeout=15
         )
         if result.returncode == 0:
             version = result.stdout.strip()
@@ -180,7 +183,6 @@ def get_version_github() -> Optional[str]:
         else:
             request = Request(url, headers=headers)
             if proxies:
-                import urllib.request
                 proxy_handler = urllib.request.ProxyHandler(proxies)
                 opener = urllib.request.build_opener(proxy_handler)
                 response = opener.open(request, timeout=5)
@@ -191,7 +193,6 @@ def get_version_github() -> Optional[str]:
         return extract_version(data.get('tag_name', ''))
     except Exception:
         pass
-
     return None
 
 
@@ -209,93 +210,115 @@ def get_latest_version() -> Optional[str]:
 
 
 # =============================================================================
-# PROCESS CLEANUP
+# NPM HELPERS
 # =============================================================================
 
-def get_process_age(proc) -> float:
+def get_npm_root() -> Optional[Path]:
     try:
-        if HAS_PSUTIL:
-            return time.time() - proc.create_time()
-        else:
-            return ORPHAN_AGE_THRESHOLD + 1
+        result = subprocess.run(
+            ['npm', 'root', '-g'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
     except Exception:
-        return 0
+        pass
+    return None
 
 
-def is_orphan_process(proc) -> bool:
-    try:
-        if HAS_PSUTIL:
-            parent = proc.parent()
-            if parent is None:
-                return True
-            if parent.pid == 1:
-                return True
-            try:
-                parent.status()
-                return False
-            except psutil.NoSuchProcess:
-                return True
-        else:
-            return False
-    except Exception:
-        return False
+# =============================================================================
+# WINDOWS EXE RENAME (avoids EBUSY during npm install)
+# =============================================================================
 
+def rename_locked_exes(npm_root: Path) -> List[Path]:
+    """Rename locked .exe files to .exe.old so npm can overwrite them."""
+    renamed = []
+    for relpath in LOCKED_EXE_RELPATHS:
+        exe_path = npm_root / relpath
+        if not exe_path.exists():
+            continue
+        old_path = exe_path.with_suffix('.exe.old')
+        try:
+            if old_path.exists():
+                try:
+                    old_path.unlink()
+                except Exception:
+                    pass
+            exe_path.rename(old_path)
+            log_info(f"Renamed locked file: {relpath.name} -> {relpath.name}.old")
+            renamed.append(old_path)
+        except Exception as e:
+            log_warn(f"Could not rename {relpath}: {e}")
+    return renamed
+
+
+def restore_renamed_exes(renamed: List[Path]):
+    """Restore .old files if install fails."""
+    for old_path in renamed:
+        original = old_path.with_suffix('')  # .exe.old -> .exe
+        try:
+            if not original.exists() and old_path.exists():
+                old_path.rename(original)
+                log_info(f"Restored: {original.name}")
+        except Exception as e:
+            log_warn(f"Could not restore {original}: {e}")
+
+
+def cleanup_old_files(npm_root: Path):
+    """Remove leftover .old files from previous updates."""
+    anthropic_dir = npm_root / '@anthropic-ai'
+    if not anthropic_dir.exists():
+        return
+    for old_file in anthropic_dir.rglob('*.old'):
+        try:
+            old_file.unlink()
+            log_info(f"Cleaned up: {old_file.name}")
+        except Exception:
+            pass
+
+
+# =============================================================================
+# PROCESS CLEANUP
+# =============================================================================
 
 def kill_orphan_processes():
     log_info("Scanning for orphan npm install processes...")
 
     if not HAS_PSUTIL:
         log_warn("psutil not available, skipping process cleanup")
-        log_warn("Install with: pip install psutil")
         return
 
     killed_count = 0
-
     for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
         try:
             cmdline = proc.info.get('cmdline', [])
             if not cmdline:
                 continue
-
             cmdline_str = ' '.join(cmdline).lower()
-
             if 'npm' in cmdline_str and 'install' in cmdline_str and 'claude-code' in cmdline_str:
                 pid = proc.info['pid']
-                age = get_process_age(proc)
+                age = time.time() - proc.info.get('create_time', 0)
                 name = proc.info.get('name', 'unknown')
 
-                log_info(f"Found process {pid} ({name}) running for {int(age)}s")
-
                 if age < ORPHAN_AGE_THRESHOLD:
-                    log_info(f"  → Skipping: process is young ({int(age)}s < {ORPHAN_AGE_THRESHOLD}s)")
                     continue
 
-                if not is_orphan_process(proc):
-                    log_info("  → Skipping: process has living parent")
-                    continue
-
-                try:
-                    cpu = proc.cpu_percent(interval=0.1)
-                    if cpu > 0:
-                        log_info(f"  → Skipping: process is using CPU ({cpu:.1f}%)")
+                parent = proc.parent()
+                if parent and parent.pid != 1:
+                    try:
+                        parent.status()
                         continue
-                except Exception:
-                    pass
+                    except psutil.NoSuchProcess:
+                        pass
 
-                log_warn(f"  → KILLING: orphan process {pid} (age: {int(age)}s)")
-
+                log_warn(f"Killing orphan process {pid} ({name})")
                 try:
                     proc.kill()
                     killed_count += 1
-                except psutil.AccessDenied:
-                    log_warn(f"  → Access denied, cannot kill process {pid}")
-                except psutil.NoSuchProcess:
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
                     pass
-
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-        except Exception as e:
-            log_warn(f"Error checking process: {e}")
 
     if killed_count > 0:
         log_info(f"Killed {killed_count} orphan process(es)")
@@ -306,114 +329,98 @@ def kill_orphan_processes():
 # DIRECTORY CLEANUP
 # =============================================================================
 
-def cleanup_npm_dirs():
-    log_info("Cleaning up npm installation directories...")
-
-    try:
-        use_shell = platform.system() == 'Windows'
-        result = subprocess.run(
-            ['npm', 'root', '-g'],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            shell=use_shell
-        )
-
-        if result.returncode == 0:
-            npm_root = Path(result.stdout.strip()) / '@anthropic-ai'
-
-            if npm_root.exists():
-                for item in npm_root.iterdir():
-                    if item.name.startswith('.claude-code-') or item.name == 'claude-code':
-                        log_warn(f"Removing: {item}")
-                        shutil.rmtree(item, ignore_errors=True)
-
-        subprocess.run(
-            ['npm', 'cache', 'clean', '--force', '@anthropic-ai/claude-code'],
-            capture_output=True,
-            timeout=10,
-            shell=use_shell
-        )
-    except Exception as e:
-        log_warn(f"Cleanup warning: {e}")
+def cleanup_npm_temp_dirs(npm_root: Path):
+    """Remove stale .claude-code-* temp directories left by npm."""
+    anthropic_dir = npm_root / '@anthropic-ai'
+    if not anthropic_dir.exists():
+        return
+    for item in anthropic_dir.iterdir():
+        if item.name.startswith('.claude-code-'):
+            log_info(f"Removing temp dir: {item.name}")
+            shutil.rmtree(item, ignore_errors=True)
 
 
 # =============================================================================
 # INSTALLATION
 # =============================================================================
 
-def do_install(target_version: str) -> bool:
-    install_cmd = f'npm install -g @anthropic-ai/claude-code@{target_version}'
+def do_install(target_version: str, npm_root: Path) -> bool:
+    install_cmd = ['npm', 'install', '-g', '--force', f'@anthropic-ai/claude-code@{target_version}']
     log_info(f"Installing version {target_version} (timeout: {INSTALL_TIMEOUT}s)...")
 
     log_path = os.path.join(tempfile.gettempdir(), f'claude-update-{os.getpid()}.log')
+    log_fd = None
 
     try:
-        env = os.environ.copy()
-
         log_fd = open(log_path, 'w')
         proc = subprocess.Popen(
-            install_cmd.split(),
+            install_cmd,
             stdout=log_fd,
             stderr=subprocess.STDOUT,
             text=True,
-            env=env
         )
 
         try:
             proc.wait(timeout=INSTALL_TIMEOUT)
 
             if proc.returncode == 0:
-                os.unlink(log_path)
                 return True
 
             log_error(f"Install failed with exit code {proc.returncode}")
-
-            try:
-                with open(log_path, 'r') as f:
-                    lines = f.readlines()
-                    for line in lines[-10:]:
-                        print(line.rstrip(), file=sys.stderr)
-            except Exception:
-                pass
-
+            _print_log_tail(log_path, 10)
             return False
 
         except subprocess.TimeoutExpired:
             log_error(f"Install timed out after {INSTALL_TIMEOUT}s")
-
             proc.kill()
             proc.wait()
-
-            try:
-                with open(log_path, 'r') as f:
-                    lines = f.readlines()
-                    for line in lines[-5:]:
-                        print(line.rstrip(), file=sys.stderr)
-            except Exception:
-                pass
-
+            _print_log_tail(log_path, 5)
             return False
 
     finally:
-        try:
+        if log_fd:
             log_fd.close()
-        except Exception:
-            pass
         try:
-            os.unlink(log_path)
+            if os.path.exists(log_path):
+                os.unlink(log_path)
         except Exception:
             pass
 
 
-def install_with_retry(target_version: str) -> bool:
+def _print_log_tail(log_path: str, lines: int):
+    try:
+        with open(log_path, 'r') as f:
+            tail = f.readlines()[-lines:]
+            for line in tail:
+                print(line.rstrip(), file=sys.stderr)
+    except Exception:
+        pass
+
+
+def install_with_retry(target_version: str, npm_root: Path) -> bool:
     for attempt in range(1, MAX_RETRIES + 1):
         kill_orphan_processes()
-        cleanup_npm_dirs()
+        cleanup_npm_temp_dirs(npm_root)
+
+        renamed = []
+        if platform.system() == 'Windows':
+            cleanup_old_files(npm_root)
+            renamed = rename_locked_exes(npm_root)
+
         time.sleep(1)
 
-        if do_install(target_version):
+        success = do_install(target_version, npm_root)
+
+        if success:
+            # Clean up .old files after successful install
+            if platform.system() == 'Windows':
+                cleanup_old_files(npm_root)
             return True
+
+        # Restore renamed files on failure
+        if renamed:
+            log_warn("Install failed, restoring renamed files...")
+            restore_renamed_exes(renamed)
 
         if attempt < MAX_RETRIES:
             log_warn(f"Attempt {attempt} failed, retrying...")
@@ -429,20 +436,17 @@ def install_with_retry(target_version: str) -> bool:
 def verify_installation(expected_version: str) -> bool:
     time.sleep(2)
 
-    actual_version = None
     for attempt in range(3):
         actual_version = get_current_version()
-
-        if actual_version:
-            comparison = compare_versions(actual_version, expected_version)
-            if comparison == 'eq':
-                log_success(f"Verified: version {actual_version}")
-                return True
+        if actual_version and compare_versions(actual_version, expected_version) == 'eq':
+            log_success(f"Verified: version {actual_version}")
+            return True
 
         if attempt < 2:
             log_info(f"Verification attempt {attempt + 1} failed, retrying in 3s...")
             time.sleep(3)
 
+    actual_version = get_current_version()
     if actual_version:
         log_warn(f"Expected {expected_version}, got {actual_version}")
     else:
@@ -481,7 +485,6 @@ class UpdateLock:
                         return False
                 except Exception:
                     pass
-
             try:
                 self.lock_fd = open(self.lock_file, 'w')
                 self.lock_fd.write(str(os.getpid()))
@@ -540,7 +543,12 @@ def main():
 
         log_info(f"Updating: {current_version} -> {latest_version}")
 
-        if install_with_retry(latest_version):
+        npm_root = get_npm_root()
+        if not npm_root:
+            log_error("Could not determine npm global root")
+            sys.exit(1)
+
+        if install_with_retry(latest_version, npm_root):
             if verify_installation(latest_version):
                 log_success(f"Update complete: {current_version} -> {latest_version}")
                 sys.exit(0)
