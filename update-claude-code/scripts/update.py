@@ -16,6 +16,7 @@ import time
 import json
 import tempfile
 import platform
+import urllib.request
 from pathlib import Path
 from typing import Optional, List
 
@@ -132,19 +133,11 @@ def get_current_version() -> Optional[str]:
 
 
 def compare_versions(v1: str, v2: str) -> str:
-    if v1 == v2:
+    t1 = tuple(int(x) for x in v1.split('.'))
+    t2 = tuple(int(x) for x in v2.split('.'))
+    if t1 == t2:
         return 'eq'
-    parts1 = [int(x) for x in v1.split('.')]
-    parts2 = [int(x) for x in v2.split('.')]
-    max_len = max(len(parts1), len(parts2))
-    parts1.extend([0] * (max_len - len(parts1)))
-    parts2.extend([0] * (max_len - len(parts2)))
-    for p1, p2 in zip(parts1, parts2):
-        if p1 < p2:
-            return 'lt'
-        elif p1 > p2:
-            return 'gt'
-    return 'eq'
+    return 'gt' if t1 > t2 else 'lt'
 
 
 def get_version_npm() -> Optional[str]:
@@ -165,7 +158,7 @@ def get_version_npm() -> Optional[str]:
 
 
 def get_version_github() -> Optional[str]:
-    from urllib.request import urlopen, Request
+    from urllib.request import urlopen, Request, ProxyHandler, build_opener
 
     try:
         url = "https://api.github.com/repos/anthropics/claude-code/releases/latest"
@@ -183,8 +176,8 @@ def get_version_github() -> Optional[str]:
         else:
             request = Request(url, headers=headers)
             if proxies:
-                proxy_handler = urllib.request.ProxyHandler(proxies)
-                opener = urllib.request.build_opener(proxy_handler)
+                proxy_handler = ProxyHandler(proxies)
+                opener = build_opener(proxy_handler)
                 response = opener.open(request, timeout=5)
             else:
                 response = urlopen(request, timeout=5)
@@ -239,11 +232,10 @@ def rename_locked_exes(npm_root: Path) -> List[Path]:
             continue
         old_path = exe_path.with_suffix('.exe.old')
         try:
-            if old_path.exists():
-                try:
-                    old_path.unlink()
-                except Exception:
-                    pass
+            try:
+                old_path.unlink()
+            except FileNotFoundError:
+                pass
             exe_path.rename(old_path)
             log_info(f"Renamed locked file: {relpath.name} -> {relpath.name}.old")
             renamed.append(old_path)
@@ -266,15 +258,14 @@ def restore_renamed_exes(renamed: List[Path]):
 
 def cleanup_old_files(npm_root: Path):
     """Remove leftover .old files from previous updates."""
-    anthropic_dir = npm_root / '@anthropic-ai'
-    if not anthropic_dir.exists():
-        return
-    for old_file in anthropic_dir.rglob('*.old'):
-        try:
-            old_file.unlink()
-            log_info(f"Cleaned up: {old_file.name}")
-        except Exception:
-            pass
+    for relpath in LOCKED_EXE_RELPATHS:
+        old_path = npm_root / relpath.with_suffix('.exe.old')
+        if old_path.exists():
+            try:
+                old_path.unlink()
+                log_info(f"Cleaned up: {old_path.name}")
+            except Exception:
+                pass
 
 
 # =============================================================================
@@ -349,10 +340,8 @@ def do_install(target_version: str, npm_root: Path) -> bool:
     log_info(f"Installing version {target_version} (timeout: {INSTALL_TIMEOUT}s)...")
 
     log_path = os.path.join(tempfile.gettempdir(), f'claude-update-{os.getpid()}.log')
-    log_fd = None
 
-    try:
-        log_fd = open(log_path, 'w')
+    with open(log_path, 'w') as log_fd:
         proc = subprocess.Popen(
             install_cmd,
             stdout=log_fd,
@@ -364,6 +353,7 @@ def do_install(target_version: str, npm_root: Path) -> bool:
             proc.wait(timeout=INSTALL_TIMEOUT)
 
             if proc.returncode == 0:
+                _safe_unlink(log_path)
                 return True
 
             log_error(f"Install failed with exit code {proc.returncode}")
@@ -377,14 +367,8 @@ def do_install(target_version: str, npm_root: Path) -> bool:
             _print_log_tail(log_path, 5)
             return False
 
-    finally:
-        if log_fd:
-            log_fd.close()
-        try:
-            if os.path.exists(log_path):
-                os.unlink(log_path)
-        except Exception:
-            pass
+        finally:
+            _safe_unlink(log_path)
 
 
 def _print_log_tail(log_path: str, lines: int):
@@ -394,6 +378,13 @@ def _print_log_tail(log_path: str, lines: int):
             for line in tail:
                 print(line.rstrip(), file=sys.stderr)
     except Exception:
+        pass
+
+
+def _safe_unlink(path: str):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
         pass
 
 
@@ -436,6 +427,7 @@ def install_with_retry(target_version: str, npm_root: Path) -> bool:
 def verify_installation(expected_version: str) -> bool:
     time.sleep(2)
 
+    actual_version = None
     for attempt in range(3):
         actual_version = get_current_version()
         if actual_version and compare_versions(actual_version, expected_version) == 'eq':
@@ -446,7 +438,6 @@ def verify_installation(expected_version: str) -> bool:
             log_info(f"Verification attempt {attempt + 1} failed, retrying in 3s...")
             time.sleep(3)
 
-    actual_version = get_current_version()
     if actual_version:
         log_warn(f"Expected {expected_version}, got {actual_version}")
     else:
@@ -517,8 +508,6 @@ def main():
     try:
         if not lock.acquire():
             sys.exit(1)
-
-        kill_orphan_processes()
 
         current_version = get_current_version()
         if not current_version:
