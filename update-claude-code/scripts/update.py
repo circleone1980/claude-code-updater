@@ -341,34 +341,33 @@ def do_install(target_version: str, npm_root: Path) -> bool:
 
     log_path = os.path.join(tempfile.gettempdir(), f'claude-update-{os.getpid()}.log')
 
-    with open(log_path, 'w') as log_fd:
-        proc = subprocess.Popen(
-            install_cmd,
-            stdout=log_fd,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    log_fd = open(log_path, 'w')
+    proc = subprocess.Popen(
+        install_cmd,
+        stdout=log_fd,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
 
-        try:
-            proc.wait(timeout=INSTALL_TIMEOUT)
+    success = False
+    try:
+        proc.wait(timeout=INSTALL_TIMEOUT)
 
-            if proc.returncode == 0:
-                _safe_unlink(log_path)
-                return True
-
+        if proc.returncode == 0:
+            success = True
+        else:
             log_error(f"Install failed with exit code {proc.returncode}")
-            _print_log_tail(log_path, 10)
-            return False
+    except subprocess.TimeoutExpired:
+        log_error(f"Install timed out after {INSTALL_TIMEOUT}s")
+        proc.kill()
+        proc.wait()
 
-        except subprocess.TimeoutExpired:
-            log_error(f"Install timed out after {INSTALL_TIMEOUT}s")
-            proc.kill()
-            proc.wait()
-            _print_log_tail(log_path, 5)
-            return False
+    log_fd.close()
 
-        finally:
-            _safe_unlink(log_path)
+    if not success:
+        _print_log_tail(log_path, 10)
+    _safe_unlink(log_path)
+    return success
 
 
 def _print_log_tail(log_path: str, lines: int):
