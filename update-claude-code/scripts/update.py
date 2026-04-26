@@ -57,6 +57,8 @@ LOCKED_EXE_RELPATHS = [
     Path('@anthropic-ai') / 'claude-code' / 'node_modules' / '@anthropic-ai' / 'claude-code-win32-x64' / 'claude.exe',
 ]
 
+IS_WINDOWS = platform.system() == 'Windows'
+
 
 def extract_version(text: str) -> Optional[str]:
     match = VERSION_PATTERN.search(text)
@@ -117,13 +119,12 @@ def log_error(message):
 
 def get_current_version() -> Optional[str]:
     try:
-        use_shell = platform.system() == 'Windows'
         result = subprocess.run(
             ['claude', '--version'],
             capture_output=True,
             text=True,
             timeout=5,
-            shell=use_shell
+            shell=IS_WINDOWS
         )
         if result.returncode == 0:
             return extract_version(result.stdout + result.stderr)
@@ -146,7 +147,8 @@ def get_version_npm() -> Optional[str]:
             ['npm', 'view', '@anthropic-ai/claude-code', 'version'],
             capture_output=True,
             text=True,
-            timeout=15
+            timeout=15,
+            shell=IS_WINDOWS
         )
         if result.returncode == 0:
             version = result.stdout.strip()
@@ -210,7 +212,8 @@ def get_npm_root() -> Optional[Path]:
     try:
         result = subprocess.run(
             ['npm', 'root', '-g'],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5,
+            shell=IS_WINDOWS
         )
         if result.returncode == 0:
             return Path(result.stdout.strip())
@@ -336,23 +339,25 @@ def cleanup_npm_temp_dirs(npm_root: Path):
 # =============================================================================
 
 def do_install(target_version: str, npm_root: Path) -> bool:
-    install_cmd = ['npm', 'install', '-g', '--force', f'@anthropic-ai/claude-code@{target_version}']
+    if IS_WINDOWS:
+        install_cmd = f'npm install -g --force @anthropic-ai/claude-code@{target_version}'
+    else:
+        install_cmd = ['npm', 'install', '-g', '--force', f'@anthropic-ai/claude-code@{target_version}']
     log_info(f"Installing version {target_version} (timeout: {INSTALL_TIMEOUT}s)...")
 
     log_path = os.path.join(tempfile.gettempdir(), f'claude-update-{os.getpid()}.log')
 
     log_fd = open(log_path, 'w')
-    proc = subprocess.Popen(
-        install_cmd,
-        stdout=log_fd,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
     success = False
     try:
+        proc = subprocess.Popen(
+            install_cmd,
+            stdout=log_fd,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=IS_WINDOWS,
+        )
         proc.wait(timeout=INSTALL_TIMEOUT)
-
         if proc.returncode == 0:
             success = True
         else:
@@ -361,12 +366,13 @@ def do_install(target_version: str, npm_root: Path) -> bool:
         log_error(f"Install timed out after {INSTALL_TIMEOUT}s")
         proc.kill()
         proc.wait()
-
-    log_fd.close()
-
-    if not success:
-        _print_log_tail(log_path, 10)
-    _safe_unlink(log_path)
+    except Exception as e:
+        log_error(f"Install error: {e}")
+    finally:
+        log_fd.close()
+        if not success:
+            _print_log_tail(log_path, 10)
+        _safe_unlink(log_path)
     return success
 
 
@@ -393,7 +399,7 @@ def install_with_retry(target_version: str, npm_root: Path) -> bool:
         cleanup_npm_temp_dirs(npm_root)
 
         renamed = []
-        if platform.system() == 'Windows':
+        if IS_WINDOWS:
             cleanup_old_files(npm_root)
             renamed = rename_locked_exes(npm_root)
 
@@ -403,7 +409,7 @@ def install_with_retry(target_version: str, npm_root: Path) -> bool:
 
         if success:
             # Clean up .old files after successful install
-            if platform.system() == 'Windows':
+            if IS_WINDOWS:
                 cleanup_old_files(npm_root)
             return True
 
